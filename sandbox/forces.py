@@ -1,8 +1,9 @@
 import functools
+from enum import Enum
 from typing import Iterable
 
 import numpy as np
-from pint import UnitRegistry
+from pint import Quantity, UnitRegistry
 
 ur = UnitRegistry()
 
@@ -13,8 +14,8 @@ class TopologicalManifold:
 
 
 class PseudoRiemannianManifold(TopologicalManifold):
-    def __init__(self, atlas, co_metric: np.array):
-        super().__init__(atlas)
+    def __init__(self, co_metric: np.array, **kwargs):
+        super().__init__(**kwargs)
         self.co_metric = co_metric
 
     def distance(self, contra_source: np.array, contra_target: np.array):
@@ -22,10 +23,8 @@ class PseudoRiemannianManifold(TopologicalManifold):
 
 
 class SpaceTime(PseudoRiemannianManifold):
-    def __init__(
-        self, atlas, co_metric: np.array = np.array([[-ur.c ** 2, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-    ):
-        super().__init__(atlas, co_metric)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.spatial_co_metric = np.array(
             [
                 [
@@ -39,6 +38,14 @@ class SpaceTime(PseudoRiemannianManifold):
     def spatial_distance(self, contra_source: np.array, contra_target: np.array):
         return self.spatial_co_metric @ (contra_target - contra_source)
 
+    @property
+    def minkowski_metric_positive_eigenvalue_space(self):
+        return np.diag(np.array([-1, 1, 1, 1]))
+
+    @property
+    def minkowski_metric_positive_eigenvalue_time(self):
+        return np.diag(np.array([1, -1, -1, -1]))
+
 
 class Event:
     def __init__(self, spacetime: SpaceTime, time: float, spatial_position: np.array):
@@ -48,39 +55,43 @@ class Event:
 
 
 class Particle(Event):
-    def __init__(self, spacetime: SpaceTime, time: float, spatial_position: np.array, spatial_velocity: np.array):
-        super().__init__(spacetime, time, spatial_position)
+    def __init__(self, spatial_velocity: np.array, **kwargs):
+        super().__init__(**kwargs)
         self.velocity = spatial_velocity
 
 
 class ElectricParticle(Particle):
-    def __init__(
-        self,
-        spacetime: SpaceTime,
-        time: float,
-        spatial_position: np.array,
-        spatial_velocity: np.array,
-        electric_charge: float,
-    ):
-        super().__init__(spacetime, time, spatial_position, spatial_velocity)
+    def __init__(self, electric_charge: Quantity, **kwargs):
+        super().__init__(**kwargs)
         self.electric_charge = electric_charge
+
+
+class MassiveParticle(Particle):
+    def __init__(self, mass: Quantity, **kwargs):
+        super().__init__(**kwargs)
+        self.mass = mass
+
+
+class ElectricMassiveParticle(ElectricParticle, MassiveParticle):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
 class RetardedElectromagneticWave:
     def __init__(self, source: ElectricParticle):
         self.source = source
 
-    def shell_distance(self, contra_position: np.array, time: float):
+    def shell_distance(self, contra_position: np.array, time: Quantity):
         # rather than each point on the shell having its velocity,
         # we save the original position.
         # it is not very physical perhaps, it is easier to know which
         # way one is going rather than where one came from ...
-        return time - np.linalg.norm(contra_position - self.source.position) / ur.c
+        return time - self.source.spacetime.spatial_distance(self.source.position, contra_position) / ur.c
 
-    def scalar_potential(self, time: float):
+    def scalar_potential(self, time: Quantity):
         return (4 * np.pi * ur.eps_0) ** (-1) * self.source.electric_charge / (ur.c * (time - self.source.time))
 
-    def vector_potential(self, time: float):
+    def vector_potential(self, time: Quantity):
         return (
             ur.mu_0
             * (4 * np.pi) ** (-1)
@@ -113,12 +124,11 @@ class LeviCevitaDensity(OddTensorDensity):
 
 class ElectroMagnetism:
     @staticmethod
-    def electric_field(event: Event, retards, hit_distance: float):
+    def electric_field(event: Event, retards, hit_distance: Quantity):
         # we want to compute
         # E = - \nabla \phi - \partial_t A
         # https://en.wikipedia.org/wiki/Curvilinear_coordinates#Differentiation
         # ...
-
 
         dx = hit_distance
         dt = hit_distance / ur.c
@@ -200,21 +210,13 @@ class ElectroMagnetism:
 
 class Force:
     @staticmethod
-    def delta(source, target):
-        return target - source
-
-    @staticmethod
-    def distance(source, target):
-        return np.linalg.norm(Force.delta(source, target))
-
-    @staticmethod
-    def gravity_on_target(source, target):
+    def gravity_on_target(source: MassiveParticle, target):
         return (
             -ur.G
             * source.mass
             * target.mass
-            * Force.distance(source.position, target.position) ** (-3)
-            * Force.delta(source.position, target.position)
+            * source.spacetime.spatial_distance(source.position, target.position) ** (-3)
+            * (target.position - target.source)
         )
 
     @staticmethod

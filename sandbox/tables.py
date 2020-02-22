@@ -16,7 +16,14 @@ quarks = [
     "antitop",
     "antibottom",
 ]
-leptons = ["electron", "electron neutrino", "muon", "muon neutrino", "tau", "tau neutrino"]
+leptons = [
+    "electron",
+    "electron neutrino",
+    "muon",
+    "muon neutrino",
+    "tau",
+    "tau neutrino",
+]
 bosons = ["photon", "w boson", "z boson", "gluon", "higgs boson"]
 
 mass = {
@@ -99,7 +106,14 @@ electric_charge = {
     "higgs boson": 0 * ur.e,
     "graviton": 0 * ur.e,
 }
-spin = {"photon": 1, "w boson": 1, "z boson": 1, "gluon": 1, "higgs boson": 0, "graviton": 2}
+spin = {
+    "photon": 1,
+    "w boson": 1,
+    "z boson": 1,
+    "gluon": 1,
+    "higgs boson": 0,
+    "graviton": 2,
+}
 weak_isospin_3 = {
     "up": 1 / 2,
     "down": -1 / 2,

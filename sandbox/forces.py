@@ -3,20 +3,31 @@ from enum import Enum
 from typing import Iterable
 
 import numpy as np
-from pint import Quantity, UnitRegistry
+from pint import Quantity, UnitRegistry, Unit
 
 ur = UnitRegistry()
 
 
 class OddTensorDensity:
-    def __init__(self, co_metric: np.array, tensor_density_weight: float):
-        detg = np.linalg.det(co_metric)
+    def __init__(self, *, covariant_metric: np.array, tensor_density_weight: float):
+        """
+        __init__ https://en.wikipedia.org/wiki/Tensor_density
+        :math:`sgn(det(g))|det(g)|^{w}`
+
+        :param covariant_metric: Covarant metric :math:`(g_{ij})_p`
+        :type covariant_metric: np.array
+        :param tensor_density_weight: Tensor density weight :math:`w`
+        :type tensor_density_weight: float
+        """
+        detg = np.linalg.det(covariant_metric)
         self.factor = np.sign(detg) * np.abs(detg) ** (tensor_density_weight)
 
 
 class LeviCevitaDensity(OddTensorDensity):
-    def __init__(self, co_metric: np.array, tensor_density_weight: float):
-        super().__init__(co_metric, tensor_density_weight)
+    def __init__(self, *, covariant_metric: np.array, tensor_density_weight: float):
+        super().__init__(
+            covariant_metric=covariant_metric, tensor_density_weight=tensor_density_weight,
+        )
 
     def __call__(self, *args):
         def ϵ(*args):
@@ -30,35 +41,38 @@ class LeviCevitaDensity(OddTensorDensity):
 
 
 class TopologicalManifold:
-    def __init__(self, atlas):
+    def __init__(self, *, atlas):
         self.atlas = atlas
 
 
 class PseudoRiemannianManifold(TopologicalManifold):
-    def __init__(self, co_metric: np.array, **kwargs):
-        super().__init__(**kwargs)
-        self.co_metric = co_metric
+    def __init__(self, *, atlas, covariant_metric: np.array):
+        super().__init__(atlas=atlas)
+        self.covariant_metric = covariant_metric
 
     def distance(self, contra_source: np.array, contra_target: np.array):
-        return self.co_metric @ (contra_target - contra_source)
+        return self.covariant_metric @ (contra_target - contra_source)
 
 
 class SpaceTime(PseudoRiemannianManifold):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.spatial_co_metric = np.array(
+    def __init__(self, *, atlas, covariant_metric: np.array):
+        super().__init__(atlas=atlas, covariant_metric=covariant_metric)
+        self.spatial_covariant_metric = np.array(
             [
                 [
-                    self.co_metric[i][j] - self.co_metric[0][i] * self.co_metric[0][j] / self.co_metric[0][0]
+                    self.covariant_metric[i][j]
+                    - self.covariant_metric[0][i] * self.covariant_metric[0][j] / self.covariant_metric[0][0]
                     for j in range(1, 4)
                 ]
                 for i in range(1, 4)
             ]
         )
-        self.levi_cevita_spatial_contravariant_tensor_density = LeviCevitaDensity(self.spatial_co_metric, -0.5)
+        self.levi_cevita_spatial_contravariant_tensor_density = LeviCevitaDensity(
+            covariant_metric=self.spatial_covariant_metric, weight=-0.5
+        )
 
     def spatial_distance(self, contra_source: np.array, contra_target: np.array):
-        return self.spatial_co_metric @ (contra_target - contra_source)
+        return self.spatial_covariant_metric @ (contra_target - contra_source)
 
     @property
     def minkowski_metric_positive_eigenvalue_space(self):
@@ -77,30 +91,34 @@ class Event:
 
 
 class Particle(Event):
-    def __init__(self, spatial_velocity: np.array, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(
+        self, spacetime: SpaceTime, time: float, spatial_position: np.array, spatial_velocity: np.array,
+    ):
+        super().__init__(spacetime, time, spatial_position)
         self.velocity = spatial_velocity
 
 
-class ElectricParticle(Particle):
-    def __init__(self, electric_charge: Quantity, **kwargs):
-        super().__init__(**kwargs)
-        self.electric_charge = electric_charge
+class ChargedParticle(Particle):
+    def __init__(
+        self,
+        spacetime: SpaceTime,
+        time: float,
+        spatial_position: np.array,
+        spatial_velocity: np.array,
+        charges: Iterable[Quantity],
+    ):
+        super().__init__(spacetime, time, spatial_position, spatial_velocity)
+        self.charges = charges
 
-
-class MassiveParticle(Particle):
-    def __init__(self, mass: Quantity, **kwargs):
-        super().__init__(**kwargs)
-        self.mass = mass
-
-
-class ElectricMassiveParticle(ElectricParticle, MassiveParticle):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def charge(self, unit: Unit):
+        for charge in self.charges:
+            if charge.dimensionality == unit.dimensionality:
+                return charge
+        return 0 * unit
 
 
 class RetardedElectromagneticWave:
-    def __init__(self, source: ElectricParticle):
+    def __init__(self, source: ChargedParticle):
         self.source = source
 
     def shell_distance(self, contra_position: np.array, time: Quantity):
@@ -111,13 +129,17 @@ class RetardedElectromagneticWave:
         return time - self.source.spacetime.spatial_distance(self.source.position, contra_position) / ur.c
 
     def scalar_potential(self, time: Quantity):
-        return (4 * np.pi * ur.eps_0) ** (-1) * self.source.electric_charge / (ur.c * (time - self.source.time))
+        return (
+            (4 * np.pi * ur.eps_0) ** (-1)
+            * self.source.charge(ur.elementary_charge)
+            / (ur.c * (time - self.source.time))
+        )
 
     def vector_potential(self, time: Quantity):
         return (
             ur.mu_0
             * (4 * np.pi) ** (-1)
-            * self.source.electric_charge
+            * self.source.charge(ur.elementary_chage)
             * self.source.velocity
             / (ur.c * (time - self.source.time))
         )
@@ -160,7 +182,7 @@ class ElectroMagnetism:
         event: Event, retard_pot: RetardedElectromagneticWave, hit_distance: Quantity
     ):
         # turn contravariant vector to covariant vector
-        A = event.spacetime.spatial_co_metric @ retard_pot.vector_potential(event.time)
+        A = event.spacetime.spatial_covariant_metric @ retard_pot.vector_potential(event.time)
 
         # \partial_x A
         dxF = retard_pot.shell_distance(event.position + np.array(hit_distance, 0, 0), event.time) < hit_distance
@@ -188,14 +210,16 @@ class ElectroMagnetism:
         )
 
     @staticmethod
-    def electric_field(event: Event, retard_pots: Iterable[RetardedElectromagneticWave], hit_distance: Quantity):
+    def electric_field(
+        event: Event, retard_pots: Iterable[RetardedElectromagneticWave], hit_distance: Quantity,
+    ):
         # we want to compute
         # E = - \nabla \phi - \partial_t A
         # https://en.wikipedia.org/wiki/Curvilinear_coordinates#Differentiation
         # ...
 
         # covariant to contravariant
-        return np.linalg.inv(event.spacetime.spatial_co_metric) @ (
+        return np.linalg.inv(event.spacetime.spatial_covariant_metric) @ (
             -sum(
                 ElectroMagnetism.scalar_potential_gradient_contribution(event, retard_pot, hit_distance)
                 for retard_pot in retard_pots
@@ -207,7 +231,9 @@ class ElectroMagnetism:
         )
 
     @staticmethod
-    def magnetic_field(event: Event, retard_pots: Iterable[RetardedElectromagneticWave], hit_distance: Quantity):
+    def magnetic_field(
+        event: Event, retard_pots: Iterable[RetardedElectromagneticWave], hit_distance: Quantity,
+    ):
         # we want to compute
         # B = curl(A)
         # https://en.wikipedia.org/wiki/Levi-Civita_symbol#Levi-Civita_tensors
@@ -222,27 +248,27 @@ class ElectroMagnetism:
 
     @staticmethod
     def lorentz_force(
-        retard_pots: Iterable[RetardedElectromagneticWave], target: ElectricParticle, hit_distance: float
+        retard_pots: Iterable[RetardedElectromagneticWave], target: ChargedParticle, hit_distance: float,
     ):
-        return target.electric_charge * (
+        return target.charge(ur.elementary_charge) * (
             ElectroMagnetism.electric_field(target, retard_pots, hit_distance)
-            + np.cross(target.velocity, ElectroMagnetism.magnetic_field(target, retard_pots, hit_distance))
+            + np.cross(target.velocity, ElectroMagnetism.magnetic_field(target, retard_pots, hit_distance),)
         )
 
 
 class Force:
     @staticmethod
-    def gravity_on_target(source: MassiveParticle, target):
+    def gravity_on_target(source: ChargedParticle, target):
         return (
             -ur.G
-            * source.mass
-            * target.mass
+            * source.charge(ur.gram)
+            * target.charge(ur.gram)
             * source.spacetime.spatial_distance(source.position, target.position) ** (-3)
             * (target.position - target.source)
         )
 
     @staticmethod
     def electromagnetism_on_target(
-        historical_waves: Iterable[RetardedElectromagneticWave], target: ElectricParticle, hit_distance
+        historical_waves: Iterable[RetardedElectromagneticWave], target: ChargedParticle, hit_distance,
     ):
         return ElectroMagnetism.lorentz_force(historical_waves, target, hit_distance)

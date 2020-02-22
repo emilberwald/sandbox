@@ -137,5 +137,8 @@ dmypy.json
 # VS Code project settings
 .vscode
 
+# Pycharm
+.idea
+
 # Poetry settings
 poetry.lock

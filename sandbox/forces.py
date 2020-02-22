@@ -8,6 +8,27 @@ from pint import Quantity, UnitRegistry
 ur = UnitRegistry()
 
 
+class OddTensorDensity:
+    def __init__(self, co_metric: np.array, tensor_density_weight: float):
+        detg = np.linalg.det(co_metric)
+        self.factor = np.sign(detg) * np.abs(detg) ** (tensor_density_weight)
+
+
+class LeviCevitaDensity(OddTensorDensity):
+    def __init__(self, co_metric: np.array, tensor_density_weight: float):
+        super().__init__(co_metric, tensor_density_weight)
+
+    def __call__(self, *args):
+        def ϵ(*args):
+            return functools.reduce(
+                lambda a, b: a * b,
+                (np.sign(aj - ai) for i, ai in enumerate(args) for j, aj in enumerate(args) if i < j),
+                1,
+            )
+
+        return self.factor * ϵ(*args)
+
+
 class TopologicalManifold:
     def __init__(self, atlas):
         self.atlas = atlas
@@ -34,6 +55,7 @@ class SpaceTime(PseudoRiemannianManifold):
                 for i in range(1, 4)
             ]
         )
+        self.levi_cevita_spatial_contravariant_tensor_density = LeviCevitaDensity(self.spatial_co_metric, -0.5)
 
     def spatial_distance(self, contra_source: np.array, contra_target: np.array):
         return self.spatial_co_metric @ (contra_target - contra_source)
@@ -101,67 +123,91 @@ class RetardedElectromagneticWave:
         )
 
 
-class OddTensorDensity:
-    def __init__(self, co_metric: np.array, tensor_density_weight: float):
-        detg = np.linalg.det(co_metric)
-        self.factor = np.sign(detg) * np.abs(detg) ** (tensor_density_weight)
-
-
-class LeviCevitaDensity(OddTensorDensity):
-    def __init__(self, co_metric: np.array, tensor_density_weight: float):
-        super().__init__(co_metric, tensor_density_weight)
-
-    def __call__(self, *args):
-        def ϵ(*args):
-            return functools.reduce(
-                lambda a, b: a * b,
-                (np.sign(aj - ai) for i, ai in enumerate(args) for j, aj in enumerate(args) if i < j),
-                1,
-            )
-
-        return self.factor * ϵ(*args)
-
-
 class ElectroMagnetism:
     @staticmethod
-    def electric_field(event: Event, retards, hit_distance: Quantity):
+    def scalar_potential_gradient_contribution(
+        event: Event, retard_pot: RetardedElectromagneticWave, hit_distance: Quantity
+    ):
+        phi = retard_pot.scalar_potential(event.time)
+        # \partial_x \phi
+        dxP = retard_pot.shell_distance(event.position + np.array(hit_distance, 0, 0), event.time) < hit_distance
+        dxM = retard_pot.shell_distance(event.position - np.array(hit_distance, 0, 0), event.time) < hit_distance
+        df0x = (dxP * phi - dxM * phi) / (2 * hit_distance)
+        # \partial_y \phi
+        dyP = retard_pot.shell_distance(event.position + np.array(0, hit_distance, 0), event.time) < hit_distance
+        dyM = retard_pot.shell_distance(event.position - np.array(0, hit_distance, 0), event.time) < hit_distance
+        df0y = (dyP * phi - dyM * phi) / (2 * hit_distance)
+        # \partial_z \phi
+        dzP = retard_pot.shell_distance(event.position + np.array(0, 0, hit_distance), event.time) < hit_distance
+        dzM = retard_pot.shell_distance(event.position - np.array(0, 0, hit_distance), event.time) < hit_distance
+        df0z = (dzP * phi - dzM * phi) / (2 * hit_distance)
+        return np.array([df0x, df0y, df0z])
+
+    @staticmethod
+    def vector_potential_partial_time_derivative_contribution(
+        event: Event, retard_pot: RetardedElectromagneticWave, hit_distance: Quantity
+    ):
+        dt = hit_distance / ur.c
+        dAt = np.array(0, 0, 0)
+        if retard_pot.shell_distance(event.position, event.time - dt) < hit_distance:
+            dAt += retard_pot.vector_potential(event.time - dt) / dt
+        if retard_pot.shell_distance(event.position, event.time) < hit_distance:
+            dAt += -retard_pot.vector_potential(event.time) / dt
+        return dAt
+
+    @staticmethod
+    def vector_potential_curl_contribution(
+        event: Event, retard_pot: RetardedElectromagneticWave, hit_distance: Quantity
+    ):
+        # turn contravariant vector to covariant vector
+        A = event.spacetime.spatial_co_metric @ retard_pot.vector_potential(event.time)
+
+        # \partial_x A
+        dxF = retard_pot.shell_distance(event.position + np.array(hit_distance, 0, 0), event.time) < hit_distance
+        dxB = retard_pot.shell_distance(event.position - np.array(hit_distance, 0, 0), event.time) < hit_distance
+        dAx = (dxF * A - dxB * A) / (2 * hit_distance)
+        # \partial_y A
+        dyF = retard_pot.shell_distance(event.position + np.array(0, hit_distance, 0), event.time) < hit_distance
+        dyB = retard_pot.shell_distance(event.position - np.array(0, hit_distance, 0), event.time) < hit_distance
+        dAy = (dyF * A - dyB * A) / (2 * hit_distance)
+        # \partial_z A
+        dzF = retard_pot.shell_distance(event.position + np.array(0, 0, hit_distance), event.time) < hit_distance
+        dzB = retard_pot.shell_distance(event.position - np.array(0, 0, hit_distance), event.time) < hit_distance
+        dAz = (dzF * A - dzB * A) / (2 * hit_distance)
+
+        dA = [dAx, dAy, dAz]
+        return np.array(
+            [
+                sum(
+                    event.spacetime.levi_cevita_spatial_contravariant_tensor_density(i, j, k) * dA[j][k]
+                    for j in range(0, 3)
+                    for k in range(0, 3)
+                )
+                for i in range(0, 3)
+            ]
+        )
+
+    @staticmethod
+    def electric_field(event: Event, retard_pots: Iterable[RetardedElectromagneticWave], hit_distance: Quantity):
         # we want to compute
         # E = - \nabla \phi - \partial_t A
         # https://en.wikipedia.org/wiki/Curvilinear_coordinates#Differentiation
         # ...
 
-        dx = hit_distance
-        dt = hit_distance / ur.c
-        nabla_phi = np.array(0, 0, 0)
-        dAt = np.array(0, 0, 0)
-        for retard in retards:
-            if retard.shell_distance(event.position, event.time - dt) < dx:
-                dAt += retard.vector_potential(event.time - dt) / dt
-            if retard.shell_distance(event.position, event.time) < dx:
-                dAt += -retard.vector_potential(event.time) / dt
-
-            phi = retard.scalar_potential(event.time)
-
-            # \partial_x \phi
-            dxF = retard.shell_distance(event.position + np.array(dx, 0, 0), event.time) < dx
-            dxB = retard.shell_distance(event.position - np.array(dx, 0, 0), event.time) < dx
-            dphix = (dxF * phi - dxB * phi) / (2 * dx)
-            # \partial_y \phi
-            dyF = retard.shell_distance(event.position + np.array(0, dx, 0), event.time) < dx
-            dyB = retard.shell_distance(event.position - np.array(0, dx, 0), event.time) < dx
-            dphiy = (dyF * phi - dyB * phi) / (2 * dx)
-            # \partial_z \phi
-            dzF = retard.shell_distance(event.position + np.array(0, 0, dx), event.time) < dx
-            dzB = retard.shell_distance(event.position - np.array(0, 0, dx), event.time) < dx
-            dphiz = (dzF * phi - dzB * phi) / (2 * dx)
-
-            nabla_phi += np.array([dphix, dphiy, dphiz])
-
         # covariant to contravariant
-        return np.linalg.inv(event.spacetime.spatial_co_metric) @ (nabla_phi - dAt)
+        return np.linalg.inv(event.spacetime.spatial_co_metric) @ (
+            -sum(
+                ElectroMagnetism.scalar_potential_gradient_contribution(event, retard_pot, hit_distance)
+                for retard_pot in retard_pots
+            )
+            - sum(
+                ElectroMagnetism.vector_potential_partial_time_derivative_contribution(event, retard_pot, hit_distance)
+                for retard_pot in retard_pots
+            )
+        )
 
     @staticmethod
-    def magnetic_field(event: Event, retards: Iterable[RetardedElectromagneticWave], hit_distance: float):
+    def magnetic_field(event: Event, retard_pots: Iterable[RetardedElectromagneticWave], hit_distance: float):
         # we want to compute
         # B = curl(A)
         # https://en.wikipedia.org/wiki/Levi-Civita_symbol#Levi-Civita_tensors
@@ -169,41 +215,18 @@ class ElectroMagnetism:
         # https://en.wikipedia.org/wiki/Curvilinear_coordinates#Differentiation
         # ...
 
-        # contravariant version of levi cevita tensor density
-        ε = LeviCevitaDensity(event.spacetime.spatial_co_metric, -0.5)
-
-        curl_contra = np.array(0, 0, 0)
-        for retard in retards:
-            # turn contravariant vector to covariant vector
-            A = event.spacetime.spatial_co_metric @ retard.vector_potential(event.time)
-
-            # \partial_x A
-            dxF = retard.shell_distance(event.position + np.array(hit_distance, 0, 0), event.time) < hit_distance
-            dxB = retard.shell_distance(event.position - np.array(hit_distance, 0, 0), event.time) < hit_distance
-            dAx = (dxF * A - dxB * A) / (2 * hit_distance)
-            # \partial_y A
-            dyF = retard.shell_distance(event.position + np.array(0, hit_distance, 0), event.time) < hit_distance
-            dyB = retard.shell_distance(event.position - np.array(0, hit_distance, 0), event.time) < hit_distance
-            dAy = (dyF * A - dyB * A) / (2 * hit_distance)
-            # \partial_z A
-            dzF = retard.shell_distance(event.position + np.array(0, 0, hit_distance), event.time) < hit_distance
-            dzB = retard.shell_distance(event.position - np.array(0, 0, hit_distance), event.time) < hit_distance
-            dAz = (dzF * A - dzB * A) / (2 * hit_distance)
-
-            dA = [dAx, dAy, dAz]
-            curl_contra += np.array(
-                [
-                    sum(ε(i, j, k) * dA[j][k] for j in range(0, curl_contra.size) for k in range(0, curl_contra.size))
-                    for i in range(0, curl_contra.size)
-                ]
-            )
-        return curl_contra
+        return sum(
+            ElectroMagnetism.vector_potential_curl_contribution(event, retard_pot, hit_distance)
+            for retard_pot in retard_pots
+        )
 
     @staticmethod
-    def lorentz_force(retards: Iterable[RetardedElectromagneticWave], target: ElectricParticle, hit_distance: float):
+    def lorentz_force(
+        retard_pots: Iterable[RetardedElectromagneticWave], target: ElectricParticle, hit_distance: float
+    ):
         return target.electric_charge * (
-            ElectroMagnetism.electric_field(target, retards, hit_distance)
-            + np.cross(target.velocity, ElectroMagnetism.magnetic_field(target, retards, hit_distance))
+            ElectroMagnetism.electric_field(target, retard_pots, hit_distance)
+            + np.cross(target.velocity, ElectroMagnetism.magnetic_field(target, retard_pots, hit_distance))
         )
 
 

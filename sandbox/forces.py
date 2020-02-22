@@ -140,25 +140,24 @@ class ElectroMagnetism:
             if retard.shell_distance(event.position, event.time) < dx:
                 dAt += -retard.vector_potential(event.time) / dt
 
-            # turn contra vector to covariant vector
             phi = retard.scalar_potential(event.time)
 
-            # \partial_x A
+            # \partial_x \phi
             dxF = retard.shell_distance(event.position + np.array(dx, 0, 0), event.time) < dx
             dxB = retard.shell_distance(event.position - np.array(dx, 0, 0), event.time) < dx
             dphix = (dxF * phi - dxB * phi) / (2 * dx)
-            # \partial_y A
+            # \partial_y \phi
             dyF = retard.shell_distance(event.position + np.array(0, dx, 0), event.time) < dx
             dyB = retard.shell_distance(event.position - np.array(0, dx, 0), event.time) < dx
             dphiy = (dyF * phi - dyB * phi) / (2 * dx)
-            # \partial_z A
+            # \partial_z \phi
             dzF = retard.shell_distance(event.position + np.array(0, 0, dx), event.time) < dx
             dzB = retard.shell_distance(event.position - np.array(0, 0, dx), event.time) < dx
             dphiz = (dzF * phi - dzB * phi) / (2 * dx)
 
             nabla_phi += np.array([dphix, dphiy, dphiz])
 
-        # to contra
+        # covariant to contravariant
         return np.linalg.inv(event.spacetime.spatial_co_metric) @ (nabla_phi - dAt)
 
     @staticmethod
@@ -170,12 +169,12 @@ class ElectroMagnetism:
         # https://en.wikipedia.org/wiki/Curvilinear_coordinates#Differentiation
         # ...
 
-        # contra version of levi cevita tensor density
+        # contravariant version of levi cevita tensor density
         ε = LeviCevitaDensity(event.spacetime.spatial_co_metric, -0.5)
 
         curl_contra = np.array(0, 0, 0)
         for retard in retards:
-            # turn contra vector to covariant vector
+            # turn contravariant vector to covariant vector
             A = event.spacetime.spatial_co_metric @ retard.vector_potential(event.time)
 
             # \partial_x A

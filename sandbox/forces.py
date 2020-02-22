@@ -207,7 +207,7 @@ class ElectroMagnetism:
         )
 
     @staticmethod
-    def magnetic_field(event: Event, retard_pots: Iterable[RetardedElectromagneticWave], hit_distance: float):
+    def magnetic_field(event: Event, retard_pots: Iterable[RetardedElectromagneticWave], hit_distance: Quantity):
         # we want to compute
         # B = curl(A)
         # https://en.wikipedia.org/wiki/Levi-Civita_symbol#Levi-Civita_tensors

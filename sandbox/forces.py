@@ -1,8 +1,11 @@
 import functools
+import logging
 from typing import Iterable, List
 
 import numpy as np
-from pint import Quantity, UnitRegistry, Unit
+from pint import Quantity, Unit, UnitRegistry
+
+logging.basicConfig(level=logging.DEBUG)
 
 ur = UnitRegistry()
 
@@ -131,6 +134,7 @@ class RetardedWave:
         # it is not very physical perhaps, it is easier to know which
         # way one is going rather than where one came from ...
         distance = time * ur.c - self.source.spacetime.spatial_distance(self.source.position, contra_position)
+        logging.debug(f"{distance.to_base_units()}")
         return distance
 
     def scalar_potential_electromagnetic(self, time: Quantity):
@@ -164,11 +168,45 @@ class RetardedWave:
         return -1 * ur.gravitational_constant * self.source.charge(ur.gram) * (ur.c * (time - self.source.time)) ** (-3)
 
 
+class HitDetection:
+    @staticmethod
+    def bin_orientations(event: Event, retard_pot: RetardedWave, hit_distance: Quantity):
+        forward_dx_delta = retard_pot.shell_distance(
+            event.position + np.array([hit_distance.magnitude, 0, 0]) * hit_distance.units, event.time
+        )
+        backward_dx_delta = retard_pot.shell_distance(
+            event.position - np.array([hit_distance.magnitude, 0, 0]) * hit_distance.units, event.time
+        )
+        forward_dy_delta = retard_pot.shell_distance(
+            event.position + np.array([0, hit_distance.magnitude, 0]) * hit_distance.units, event.time
+        )
+        backward_dy_delta = retard_pot.shell_distance(
+            event.position - np.array([0, hit_distance.magnitude, 0]) * hit_distance.units, event.time
+        )
+        forward_dz_delta = retard_pot.shell_distance(
+            event.position + np.array([0, 0, hit_distance.magnitude]) * hit_distance.units, event.time
+        )
+        backward_dz_delta = retard_pot.shell_distance(
+            event.position - np.array([0, 0, hit_distance.magnitude]) * hit_distance.units, event.time
+        )
+        logging.debug(f"x: {backward_dx_delta}, {forward_dx_delta}")
+        logging.debug(f"y: {backward_dy_delta}, {forward_dy_delta}")
+        logging.debug(f"z: {backward_dz_delta}, {forward_dz_delta}")
+        orientations = [
+            int(forward_dx_delta < hit_distance) - int(backward_dx_delta < hit_distance),
+            int(forward_dy_delta < hit_distance) - int(backward_dy_delta < hit_distance),
+            int(forward_dz_delta < hit_distance) - int(backward_dz_delta < hit_distance),
+        ]
+        logging.debug(f"{orientations}")
+        return orientations
+
+
 class Gravity:
     @staticmethod
     def scalar_potential_contribution(event: Event, retard_pot: RetardedWave, hit_distance: Quantity):
-        hit = retard_pot.shell_distance(event.position, event.time) < hit_distance
-        return hit * retard_pot.scalar_potential_gravitational(event.time)
+        φ = retard_pot.scalar_potential_gravitational(event.time)
+        is_hit = retard_pot.shell_distance(event.position, event.time) < hit_distance
+        return is_hit * φ
 
     @staticmethod
     def gravitational_force(retard_pots: Iterable[RetardedWave], target: ChargedParticle, hit_distance: Quantity):
@@ -184,121 +222,46 @@ class Gravity:
 class ElectroMagnetism:
     @staticmethod
     def scalar_potential_gradient_contribution(event: Event, retard_pot: RetardedWave, hit_distance: Quantity):
-        phi = retard_pot.scalar_potential_electromagnetic(event.time)
-        # \partial_x \phi
-        dxP = (
-            retard_pot.shell_distance(
-                event.position + np.array([hit_distance.magnitude, 0, 0]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dxM = (
-            retard_pot.shell_distance(
-                event.position - np.array([hit_distance.magnitude, 0, 0]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        df0x = (dxP * phi - dxM * phi) / (2 * hit_distance)
-        # \partial_y \phi
-        dyP = (
-            retard_pot.shell_distance(
-                event.position + np.array([0, hit_distance.magnitude, 0]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dyM = (
-            retard_pot.shell_distance(
-                event.position - np.array([0, hit_distance.magnitude, 0]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        df0y = (dyP * phi - dyM * phi) / (2 * hit_distance)
-        # \partial_z \phi
-        dzP = (
-            retard_pot.shell_distance(
-                event.position + np.array([0, 0, hit_distance.magnitude]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dzM = (
-            retard_pot.shell_distance(
-                event.position - np.array([0, 0, hit_distance.magnitude]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        df0z = (dzP * phi - dzM * phi) / (2 * hit_distance)
-        return pintify([df0x, df0y, df0z])
+        φ = retard_pot.scalar_potential_electromagnetic(event.time)
+        sign_x, sign_y, sign_z = HitDetection.bin_orientations(event, retard_pot, hit_distance)
+        δφδx = φ * sign_x / (2 * hit_distance)
+        δφδy = φ * sign_y / (2 * hit_distance)
+        δφδz = φ * sign_z / (2 * hit_distance)
+        gradφ = pintify([δφδx, δφδy, δφδz])
+        return gradφ
 
     @staticmethod
     def vector_potential_partial_time_derivative_contribution(
         event: Event, retard_pot: RetardedWave, hit_distance: Quantity
     ):
         dt = hit_distance / ur.c
-        AM = retard_pot.shell_distance(event.position, event.time - dt) < hit_distance
-        AP = retard_pot.shell_distance(event.position, event.time) < hit_distance
-        return AM * (retard_pot.vector_potential_electromagnetic(event.time - dt) / dt) + AP * (
-            -retard_pot.vector_potential_electromagnetic(event.time) / dt
+        backward_dt_hit = retard_pot.shell_distance(event.position, event.time - dt) < hit_distance
+        center_dt_hit = retard_pot.shell_distance(event.position, event.time) < hit_distance
+        δAδt = (backward_dt_hit * (retard_pot.vector_potential_electromagnetic(event.time - dt) / dt)) + (
+            center_dt_hit * (-retard_pot.vector_potential_electromagnetic(event.time) / dt)
         )
+        return δAδt
 
     @staticmethod
     def vector_potential_curl_contribution(event: Event, retard_pot: RetardedWave, hit_distance: Quantity):
         # turn contravariant vector to covariant vector
         A = event.spacetime.spatial_covariant_metric @ retard_pot.vector_potential_electromagnetic(event.time)
-
-        # \partial_x A
-        dxF = (
-            retard_pot.shell_distance(
-                event.position + np.array([hit_distance.magnitude, 0, 0]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dxB = (
-            retard_pot.shell_distance(
-                event.position - np.array([hit_distance.magnitude, 0, 0]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dAx = (dxF * A - dxB * A) / (2 * hit_distance)
-        # \partial_y A
-        dyF = (
-            retard_pot.shell_distance(
-                event.position + np.array([0, hit_distance.magnitude, 0]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dyB = (
-            retard_pot.shell_distance(
-                event.position - np.array([0, hit_distance.magnitude, 0]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dAy = (dyF * A - dyB * A) / (2 * hit_distance)
-        # \partial_z A
-        dzF = (
-            retard_pot.shell_distance(
-                event.position + np.array([0, 0, hit_distance.magnitude]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dzB = (
-            retard_pot.shell_distance(
-                event.position - np.array([0, 0, hit_distance.magnitude]) * hit_distance.units, event.time
-            )
-            < hit_distance
-        )
-        dAz = (dzF * A - dzB * A) / (2 * hit_distance)
-
-        dA = [dAx, dAy, dAz]
-        return pintify(
+        sign_x, sign_y, sign_z = HitDetection.bin_orientations(event, retard_pot, hit_distance)
+        δAδx = A * sign_x / (2 * hit_distance)
+        δAδy = A * sign_y / (2 * hit_distance)
+        δAδz = A * sign_z / (2 * hit_distance)
+        gradA = [δAδx, δAδy, δAδz]
+        curlA = pintify(
             [
                 sum(
-                    event.spacetime.levi_cevita_spatial_contravariant_tensor_density(i, j, k) * dA[j][k]
+                    event.spacetime.levi_cevita_spatial_contravariant_tensor_density(i, j, k) * gradA[j][k]
                     for j in range(0, 3)
                     for k in range(0, 3)
                 )
                 for i in range(0, 3)
             ]
         )
+        return curlA
 
     @staticmethod
     def electric_field(
@@ -339,7 +302,7 @@ class ElectroMagnetism:
 
     @staticmethod
     def lorentz_force(
-        retard_pots: Iterable[RetardedWave], target: ChargedParticle, hit_distance: float,
+        retard_pots: Iterable[RetardedWave], target: ChargedParticle, hit_distance: Quantity,
     ):
         return target.charge(ur.elementary_charge) * (
             ElectroMagnetism.electric_field(target, retard_pots, hit_distance)

@@ -5,7 +5,7 @@ from typing import Iterable, List
 import numpy as np
 from pint import Quantity, Unit, UnitRegistry
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 ur = UnitRegistry()
 
@@ -90,14 +90,14 @@ class SpaceTime(PseudoRiemannianManifold):
 
 
 class Event:
-    def __init__(self, *, spacetime: SpaceTime, time: float, spatial_position: np.array):
+    def __init__(self, *, spacetime: SpaceTime, time: Quantity, spatial_position: np.array):
         self.spacetime = spacetime
         self.time = time
         self.position = spatial_position
 
 
 class Particle(Event):
-    def __init__(self, *, spacetime: SpaceTime, time: float, spatial_position: np.array, spatial_velocity: np.array):
+    def __init__(self, *, spacetime: SpaceTime, time: Quantity, spatial_position: np.array, spatial_velocity: np.array):
         super().__init__(spacetime=spacetime, time=time, spatial_position=spatial_position)
         self.velocity = spatial_velocity
 
@@ -107,7 +107,7 @@ class ChargedParticle(Particle):
         self,
         *,
         spacetime: SpaceTime,
-        time: float,
+        time: Quantity,
         spatial_position: np.array,
         spatial_velocity: np.array,
         charges: Iterable[Quantity],
@@ -134,7 +134,6 @@ class RetardedWave:
         # it is not very physical perhaps, it is easier to know which
         # way one is going rather than where one came from ...
         distance = time * ur.c - self.source.spacetime.spatial_distance(self.source.position, contra_position)
-        logging.debug(f"{distance.to_base_units()}")
         return distance
 
     def scalar_potential_electromagnetic(self, time: Quantity):
@@ -189,15 +188,15 @@ class HitDetection:
         backward_dz_delta = retard_pot.shell_distance(
             event.position - np.array([0, 0, hit_distance.magnitude]) * hit_distance.units, event.time
         )
-        logging.debug(f"x: {backward_dx_delta}, {forward_dx_delta}")
-        logging.debug(f"y: {backward_dy_delta}, {forward_dy_delta}")
-        logging.debug(f"z: {backward_dz_delta}, {forward_dz_delta}")
         orientations = [
-            int(forward_dx_delta < hit_distance) - int(backward_dx_delta < hit_distance),
-            int(forward_dy_delta < hit_distance) - int(backward_dy_delta < hit_distance),
-            int(forward_dz_delta < hit_distance) - int(backward_dz_delta < hit_distance),
+            int(0 < forward_dx_delta < hit_distance) - int(0 < backward_dx_delta < hit_distance),
+            int(0 < forward_dy_delta < hit_distance) - int(0 < backward_dy_delta < hit_distance),
+            int(0 < forward_dz_delta < hit_distance) - int(0 < backward_dz_delta < hit_distance),
         ]
-        logging.debug(f"{orientations}")
+
+        logging.debug(
+            f"(t, x, y, z): ({event.time};{backward_dx_delta.to_base_units()}, {forward_dx_delta.to_base_units()};{backward_dy_delta.to_base_units()}, {forward_dy_delta.to_base_units()};{backward_dz_delta.to_base_units()}, {forward_dz_delta.to_base_units()}). {orientations}"
+        )
         return orientations
 
 
@@ -235,8 +234,8 @@ class ElectroMagnetism:
         event: Event, retard_pot: RetardedWave, hit_distance: Quantity
     ):
         dt = hit_distance / ur.c
-        backward_dt_hit = retard_pot.shell_distance(event.position, event.time - dt) < hit_distance
-        center_dt_hit = retard_pot.shell_distance(event.position, event.time) < hit_distance
+        backward_dt_hit = 0 < retard_pot.shell_distance(event.position, event.time - dt) < hit_distance
+        center_dt_hit = 0 < retard_pot.shell_distance(event.position, event.time) < hit_distance
         δAδt = (backward_dt_hit * (retard_pot.vector_potential_electromagnetic(event.time - dt) / dt)) + (
             center_dt_hit * (-retard_pot.vector_potential_electromagnetic(event.time) / dt)
         )

@@ -1,6 +1,5 @@
-from pint import UnitRegistry
+from sandbox import *
 
-ur = UnitRegistry()
 
 quarks = [
     "up",
@@ -184,3 +183,8 @@ bottomness = {
     "antitop": 0,
     "antibottom": 1,
 }
+
+charges = [
+    mass,
+    electric_charge,
+]

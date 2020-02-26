@@ -1,30 +1,62 @@
-import logging
-
 from matplotlib import pyplot
 from mpl_toolkits.mplot3d import Axes3D
 
+from sandbox import *
 from sandbox.forces import *
+from sandbox.tables import *
 
 logging.basicConfig(level=logging.INFO)
 
 ur.setup_matplotlib()
 
+
+def proton(spacetime, time, position, velocity):
+    return ChargedParticle(
+        spacetime=spacetime,
+        time=time,
+        spatial_position=position,
+        spatial_velocity=velocity,
+        charges=tuple(
+            2 * charge["up"] + 1 * charge["down"] for charge in charges if "up" in charge and "down" in charge
+        ),
+    )
+
+
+def electron(spacetime, time, spatial_position, spatial_velocity):
+    return ChargedParticle(
+        spacetime=spacetime,
+        time=time,
+        spatial_position=spatial_position,
+        spatial_velocity=spatial_velocity,
+        charges=tuple(2 * charge["electron"] + 1 * charge["electron"] for charge in charges if "electron" in charge),
+    )
+
+BOHR_RADIUS_M = 5.29177210903e-11
+
+def hydrogen(spacetime, time, spatial_position, spatial_velocity):
+    particles: List[ChargedParticle] = list()
+    particles.append(proton(spacetime, time, spatial_position, spatial_velocity))
+    particles.append(
+        electron(spacetime, time, spatial_position + np.array([BOHR_RADIUS_M, 0, 0]) * ur.m, spatial_velocity)
+    )
+    return particles
+
+
 if __name__ == "__main__":
     force = Force()
     particles: List[ChargedParticle] = list()
     spacetime = SpaceTime(atlas=None, covariant_metric=SpaceTime.minkowski_metric_positive_eigenvalue_space)
-    nof_particles = 10
+    nof_particles = 3
     time = 0 * ur.s
-    dx = 0.1 * ur.m
+    dx = BOHR_RADIUS_M * ur.m
     dt = 0.1 * dx / ur.c
     for i in range(0, nof_particles):
-        particles.append(
-            ChargedParticle(
+        particles.extend(
+            hydrogen(
                 spacetime=spacetime,
                 time=time,
-                spatial_position=np.random.rand(3) * dx * 10,
+                spatial_position=np.random.rand(3) * dx,
                 spatial_velocity=ur.m / ur.s * np.zeros(3),
-                charges=(1e10 * ur.coulomb, 1e10 * ur.kg),
             )
         )
 
